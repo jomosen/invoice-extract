@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+samples/
+
+# Environment
+.env
+
+# Local scratch files
+scratch.py
