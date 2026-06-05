@@ -10,7 +10,7 @@ from typing import Any
 
 import fitz  # PyMuPDF
 
-from .models import FacturaProveedor, Importes
+from .models import InvoiceAmounts, SupplierInvoice
 from .validate import flag_for_review
 
 _SYSTEM_PROMPT_TEMPLATE = """You are an invoice data extraction assistant.
@@ -18,16 +18,18 @@ Extract the following fields from the invoice image(s) and return ONLY a valid J
 
 {recipient_context}
 Required JSON keys:
-  proveedor        – supplier name (string)
-  cif              – supplier tax ID, or null if not found (string or null)
-  numero_factura   – invoice number (string)
-  fecha_emision    – issue date in ISO format YYYY-MM-DD (string)
-  fecha_vencimiento – due date in ISO format YYYY-MM-DD, or null (string or null)
-  base_imponible   – taxable base amount as a decimal number
-  tipo_iva         – VAT rate as a percentage number, NOT a fraction (e.g. 21 for 21% VAT, never 0.21)
-  cuota_iva        – VAT amount as a decimal number
-  total            – total amount including VAT as a decimal number
-  confianza        – your self-assessed extraction confidence between 0.0 and 1.0
+  supplier_name  – name of the invoice issuer / seller (string)
+  tax_id         – supplier tax ID, or null if not found (string or null)
+  invoice_number – invoice reference number (string)
+  issue_date     – issue date in ISO format YYYY-MM-DD (string)
+  due_date       – payment due date in ISO format YYYY-MM-DD, or null (string or null)
+  tax_base       – taxable base amount as a decimal number
+  vat_rate       – VAT rate as a percentage number, NOT a fraction (e.g. 21 for 21% VAT, never 0.21)
+  vat_amount     – VAT amount as a decimal number
+  total          – total amount including VAT as a decimal number
+  confidence     – your self-assessed extraction confidence between 0.0 and 1.0
+
+Note: source invoices are typically in Spanish, so the relevant fields may appear under Spanish labels such as "base imponible", "cuota IVA", "tipo IVA", "vencimiento", "datos fiscales del emisor", or "datos fiscales cliente".
 
 Return exactly one JSON object. Use dot-notation decimals (e.g. 121.00), not locale-specific formatting."""
 
@@ -42,12 +44,13 @@ def _build_system_prompt(recipient_name: str | None, recipient_tax_id: str | Non
         hint = " and ".join(parts)
         context = (
             f"Important context: the invoice recipient (buyer) has {hint}"
-            " — never extract this entity as the proveedor (supplier)."
+            " — never extract this entity as the supplier_name or tax_id."
+            " The supplier is always the issuer (seller) of the invoice."
         )
     else:
         context = (
-            "Important context: the proveedor must be the invoice issuer (seller),"
-            " never the buyer/recipient."
+            "Important context: supplier_name and tax_id must identify the invoice issuer (seller),"
+            " never the buyer or recipient."
         )
     return _SYSTEM_PROMPT_TEMPLATE.format(recipient_context=context)
 
@@ -86,7 +89,7 @@ def extract_invoice(
     min_confidence: float = 0.8,
     recipient_name: str | None = None,
     recipient_tax_id: str | None = None,
-) -> FacturaProveedor:
+) -> SupplierInvoice:
     """Extract structured invoice data from *pdf_path* using *client*.
 
     *client* must expose the ``chat.completions.create`` interface (OpenAI SDK style).
@@ -94,7 +97,7 @@ def extract_invoice(
 
     *recipient_name* and *recipient_tax_id* identify the invoice buyer.  When provided,
     the system prompt explicitly tells the model not to extract the recipient as the
-    supplier.  If the extracted CIF matches *recipient_tax_id* (after normalisation),
+    supplier.  If the extracted tax_id matches *recipient_tax_id* (after normalisation),
     the invoice is flagged for human review.
     """
     pdf_path = Path(pdf_path)
@@ -126,37 +129,37 @@ def extract_invoice(
     raw_text = response.choices[0].message.content
     data = _parse_json_response(raw_text)
 
-    importes = Importes(
-        base_imponible=Decimal(str(data["base_imponible"])),
-        tipo_iva=Decimal(str(data["tipo_iva"])),
-        cuota_iva=Decimal(str(data["cuota_iva"])),
+    amounts = InvoiceAmounts(
+        tax_base=Decimal(str(data["tax_base"])),
+        vat_rate=Decimal(str(data["vat_rate"])),
+        vat_amount=Decimal(str(data["vat_amount"])),
         total=Decimal(str(data["total"])),
     )
 
-    factura = FacturaProveedor(
-        proveedor=data["proveedor"],
-        cif=data.get("cif"),
-        numero_factura=data["numero_factura"],
-        fecha_emision=date.fromisoformat(data["fecha_emision"]),
-        fecha_vencimiento=(
-            date.fromisoformat(data["fecha_vencimiento"])
-            if data.get("fecha_vencimiento")
+    invoice = SupplierInvoice(
+        supplier_name=data["supplier_name"],
+        tax_id=data.get("tax_id"),
+        invoice_number=data["invoice_number"],
+        issue_date=date.fromisoformat(data["issue_date"]),
+        due_date=(
+            date.fromisoformat(data["due_date"])
+            if data.get("due_date")
             else None
         ),
-        importes=importes,
-        confianza=float(data["confianza"]),
-        documento_origen=pdf_path.name,
+        amounts=amounts,
+        confidence=float(data["confidence"]),
+        source_document=pdf_path.name,
     )
 
-    factura = flag_for_review(factura, min_confidence=min_confidence)
+    invoice = flag_for_review(invoice, min_confidence=min_confidence)
 
-    if recipient_tax_id and factura.cif:
-        # factura.cif is already normalised by FacturaProveedor.normalize_cif
-        if factura.cif == _normalize_tax_id(recipient_tax_id):
-            factura.incidencias.append(
-                f"Extracted supplier CIF ({factura.cif}) matches the recipient tax ID"
-                " — the extracted proveedor may be the invoice recipient, not the supplier"
+    if recipient_tax_id and invoice.tax_id:
+        # invoice.tax_id is already normalised by SupplierInvoice.normalize_tax_id
+        if invoice.tax_id == _normalize_tax_id(recipient_tax_id):
+            invoice.issues.append(
+                f"Extracted tax_id ({invoice.tax_id}) matches the recipient tax ID"
+                " — the extracted supplier may be the invoice recipient, not the supplier"
             )
-            factura.requiere_revision = True
+            invoice.needs_review = True
 
-    return factura
+    return invoice

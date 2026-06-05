@@ -1,126 +1,126 @@
-"""Tests for FacturaProveedor model validation logic."""
+"""Tests for SupplierInvoice model validation logic."""
 
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
-from invoice_extract.models import FacturaProveedor, Importes
+from invoice_extract.models import InvoiceAmounts, SupplierInvoice
 
 
-def _make_factura(**overrides) -> FacturaProveedor:
+def _make_invoice(**overrides) -> SupplierInvoice:
     defaults = dict(
-        proveedor="Ferretería Ejemplo S.L.",
-        cif="B12345678",
-        numero_factura="F-2026-001",
-        fecha_emision=date(2026, 1, 15),
-        fecha_vencimiento=None,
-        importes=Importes(
-            base_imponible=Decimal("100.00"),
-            tipo_iva=Decimal("21"),
-            cuota_iva=Decimal("21.00"),
+        supplier_name="Ferretería Ejemplo S.L.",
+        tax_id="B12345678",
+        invoice_number="F-2026-001",
+        issue_date=date(2026, 1, 15),
+        due_date=None,
+        amounts=InvoiceAmounts(
+            tax_base=Decimal("100.00"),
+            vat_rate=Decimal("21"),
+            vat_amount=Decimal("21.00"),
             total=Decimal("121.00"),
         ),
-        confianza=0.95,
-        documento_origen="factura.pdf",
+        confidence=0.95,
+        source_document="invoice.pdf",
     )
     defaults.update(overrides)
-    return FacturaProveedor(**defaults)
+    return SupplierInvoice(**defaults)
 
 
 # --- arithmetic validation ---
 
-def test_valid_invoice_has_no_incidencias():
-    factura = _make_factura()
-    assert factura.incidencias == []
-    assert factura.requiere_revision is False
+def test_valid_invoice_has_no_issues():
+    invoice = _make_invoice()
+    assert invoice.issues == []
+    assert invoice.needs_review is False
 
 
-def test_total_mismatch_triggers_revision():
-    factura = _make_factura(
-        importes=Importes(
-            base_imponible=Decimal("100.00"),
-            tipo_iva=Decimal("21"),
-            cuota_iva=Decimal("21.00"),
+def test_total_mismatch_triggers_review():
+    invoice = _make_invoice(
+        amounts=InvoiceAmounts(
+            tax_base=Decimal("100.00"),
+            vat_rate=Decimal("21"),
+            vat_amount=Decimal("21.00"),
             total=Decimal("130.00"),  # wrong total
         )
     )
-    assert factura.requiere_revision is True
-    assert any("total" in inc for inc in factura.incidencias)
+    assert invoice.needs_review is True
+    assert any("total" in issue for issue in invoice.issues)
 
 
-def test_tax_amount_mismatch_triggers_revision():
-    factura = _make_factura(
-        importes=Importes(
-            base_imponible=Decimal("100.00"),
-            tipo_iva=Decimal("21"),
-            cuota_iva=Decimal("10.00"),  # should be 21.00
+def test_vat_amount_mismatch_triggers_review():
+    invoice = _make_invoice(
+        amounts=InvoiceAmounts(
+            tax_base=Decimal("100.00"),
+            vat_rate=Decimal("21"),
+            vat_amount=Decimal("10.00"),  # should be 21.00
             total=Decimal("110.00"),
         )
     )
-    assert factura.requiere_revision is True
-    assert len(factura.incidencias) >= 1
+    assert invoice.needs_review is True
+    assert len(invoice.issues) >= 1
 
 
-def test_both_checks_pass_no_revision():
-    """Rounding-safe amounts within tolerance should not trigger revision."""
-    factura = _make_factura(
-        importes=Importes(
-            base_imponible=Decimal("99.99"),
-            tipo_iva=Decimal("21"),
-            cuota_iva=Decimal("21.00"),  # 99.99 * 0.21 = 20.9979 → within 0.02
+def test_both_checks_pass_no_review():
+    """Rounding-safe amounts within tolerance should not trigger review."""
+    invoice = _make_invoice(
+        amounts=InvoiceAmounts(
+            tax_base=Decimal("99.99"),
+            vat_rate=Decimal("21"),
+            vat_amount=Decimal("21.00"),  # 99.99 * 21 / 100 = 20.9979 → within 0.02
             total=Decimal("120.99"),
         )
     )
-    assert factura.requiere_revision is False
-    assert factura.incidencias == []
+    assert invoice.needs_review is False
+    assert invoice.issues == []
 
 
-# --- CIF/NIF format validation ---
+# --- tax ID format validation ---
 
-def test_cif_letter_plus_digits_passes():
+def test_tax_id_letter_plus_digits_passes():
     """Standard CIF: letter + 8 digits."""
-    factura = _make_factura(cif="A87654321")
-    assert factura.cif == "A87654321"
-    assert factura.incidencias == []
-    assert factura.requiere_revision is False
+    invoice = _make_invoice(tax_id="A87654321")
+    assert invoice.tax_id == "A87654321"
+    assert invoice.issues == []
+    assert invoice.needs_review is False
 
 
-def test_nif_digits_plus_letter_passes():
+def test_tax_id_digits_plus_letter_passes():
     """Standard NIF: 8 digits + letter."""
-    factura = _make_factura(cif="12345678Z")
-    assert factura.cif == "12345678Z"
-    assert factura.incidencias == []
+    invoice = _make_invoice(tax_id="12345678Z")
+    assert invoice.tax_id == "12345678Z"
+    assert invoice.issues == []
 
 
-def test_nie_letter_digits_letter_passes():
+def test_tax_id_nie_format_passes():
     """NIE format: letter + 7 digits + letter."""
-    factura = _make_factura(cif="X1234567L")
-    assert factura.cif == "X1234567L"
-    assert factura.incidencias == []
+    invoice = _make_invoice(tax_id="X1234567L")
+    assert invoice.tax_id == "X1234567L"
+    assert invoice.issues == []
 
 
-def test_cif_normalization_strips_es_prefix():
-    factura = _make_factura(cif="ESB12345678")
-    assert factura.cif == "B12345678"
-    assert factura.incidencias == []
+def test_tax_id_normalization_strips_es_prefix():
+    invoice = _make_invoice(tax_id="ESB12345678")
+    assert invoice.tax_id == "B12345678"
+    assert invoice.issues == []
 
 
-def test_cif_normalization_uppercases_and_strips_spaces():
-    factura = _make_factura(cif=" b 12345678 ")
-    assert factura.cif == "B12345678"
-    assert factura.incidencias == []
+def test_tax_id_normalization_uppercases_and_strips_spaces():
+    invoice = _make_invoice(tax_id=" b 12345678 ")
+    assert invoice.tax_id == "B12345678"
+    assert invoice.issues == []
 
 
-def test_invalid_cif_nine_digits_adds_incidencia():
+def test_invalid_tax_id_nine_digits_flags_review():
     """9 digits with no letter is not a valid Spanish tax ID."""
-    factura = _make_factura(cif="123456789")
-    assert factura.requiere_revision is True
-    assert any("unrecognised format" in inc for inc in factura.incidencias)
+    invoice = _make_invoice(tax_id="123456789")
+    assert invoice.needs_review is True
+    assert any("unrecognised format" in issue for issue in invoice.issues)
 
 
-def test_none_cif_skips_format_validation():
-    factura = _make_factura(cif=None)
-    assert factura.cif is None
-    assert factura.incidencias == []
-    assert factura.requiere_revision is False
+def test_none_tax_id_skips_format_validation():
+    invoice = _make_invoice(tax_id=None)
+    assert invoice.tax_id is None
+    assert invoice.issues == []
+    assert invoice.needs_review is False

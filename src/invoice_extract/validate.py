@@ -1,17 +1,17 @@
 """Post-extraction validation rules applied deterministically."""
 
-from .models import FacturaProveedor
+from .models import SupplierInvoice
 
 
-def flag_for_review(factura: FacturaProveedor, min_confidence: float = 0.8) -> FacturaProveedor:
-    """Mark *factura* for human review when model confidence is below *min_confidence*.
+def flag_for_review(invoice: SupplierInvoice, min_confidence: float = 0.8) -> SupplierInvoice:
+    """Mark *invoice* for human review when model confidence is below *min_confidence*.
 
-    Existing incidencias are preserved.  Returns the (possibly mutated) factura.
+    Existing issues are preserved.  Returns the (possibly mutated) invoice.
     """
-    if factura.confianza < min_confidence:
-        factura.incidencias.append(
-            f"Model confidence ({factura.confianza:.2f}) is below the minimum"
+    if invoice.confidence < min_confidence:
+        invoice.issues.append(
+            f"Model confidence ({invoice.confidence:.2f}) is below the minimum"
             f" threshold ({min_confidence:.2f})"
         )
-        factura.requiere_revision = True
-    return factura
+        invoice.needs_review = True
+    return invoice

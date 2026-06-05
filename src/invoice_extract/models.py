@@ -6,31 +6,31 @@ from decimal import Decimal
 
 from pydantic import BaseModel, field_validator, model_validator
 
-_CIF_PATTERN = re.compile(r'^([A-Z]\d{8}|\d{8}[A-Z]|[A-Z]\d{7}[A-Z])$')
+_TAX_ID_PATTERN = re.compile(r'^([A-Z]\d{8}|\d{8}[A-Z]|[A-Z]\d{7}[A-Z])$')
 
 
-class Importes(BaseModel):
-    base_imponible: Decimal
-    tipo_iva: Decimal
-    cuota_iva: Decimal
+class InvoiceAmounts(BaseModel):
+    tax_base: Decimal
+    vat_rate: Decimal
+    vat_amount: Decimal
     total: Decimal
 
 
-class FacturaProveedor(BaseModel):
-    proveedor: str
-    cif: str | None
-    numero_factura: str
-    fecha_emision: date
-    fecha_vencimiento: date | None
-    importes: Importes
-    confianza: float
-    incidencias: list[str] = []
-    requiere_revision: bool = False
-    documento_origen: str
+class SupplierInvoice(BaseModel):
+    supplier_name: str
+    tax_id: str | None
+    invoice_number: str
+    issue_date: date
+    due_date: date | None
+    amounts: InvoiceAmounts
+    confidence: float
+    issues: list[str] = []
+    needs_review: bool = False
+    source_document: str
 
-    @field_validator('cif', mode='before')
+    @field_validator('tax_id', mode='before')
     @classmethod
-    def normalize_cif(cls, v: str | None) -> str | None:
+    def normalize_tax_id(cls, v: str | None) -> str | None:
         if v is None:
             return v
         v = str(v).upper().replace(' ', '').replace('-', '')
@@ -39,30 +39,30 @@ class FacturaProveedor(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_fields(self) -> "FacturaProveedor":
-        imp = self.importes
+    def validate_amounts_and_format(self) -> "SupplierInvoice":
+        amt = self.amounts
         tolerance = Decimal("0.02")
 
-        base_plus_tax = imp.base_imponible + imp.cuota_iva
-        if abs(base_plus_tax - imp.total) > tolerance:
-            self.incidencias.append(
-                f"base_imponible ({imp.base_imponible}) + cuota_iva ({imp.cuota_iva})"
-                f" = {base_plus_tax} does not match total ({imp.total})"
+        base_plus_vat = amt.tax_base + amt.vat_amount
+        if abs(base_plus_vat - amt.total) > tolerance:
+            self.issues.append(
+                f"tax_base ({amt.tax_base}) + vat_amount ({amt.vat_amount})"
+                f" = {base_plus_vat} does not match total ({amt.total})"
             )
-            self.requiere_revision = True
+            self.needs_review = True
 
-        expected_tax = imp.base_imponible * imp.tipo_iva / Decimal("100")
-        if abs(imp.cuota_iva - expected_tax) > tolerance:
-            self.incidencias.append(
-                f"cuota_iva ({imp.cuota_iva}) does not match"
-                f" base_imponible * tipo_iva / 100 ({expected_tax:.4f})"
+        expected_vat = amt.tax_base * amt.vat_rate / Decimal("100")
+        if abs(amt.vat_amount - expected_vat) > tolerance:
+            self.issues.append(
+                f"vat_amount ({amt.vat_amount}) does not match"
+                f" tax_base * vat_rate / 100 ({expected_vat:.4f})"
             )
-            self.requiere_revision = True
+            self.needs_review = True
 
-        if self.cif is not None and not _CIF_PATTERN.match(self.cif):
-            self.incidencias.append(
-                f"CIF/NIF '{self.cif}' has an unrecognised format"
+        if self.tax_id is not None and not _TAX_ID_PATTERN.match(self.tax_id):
+            self.issues.append(
+                f"Tax ID '{self.tax_id}' has an unrecognised format"
             )
-            self.requiere_revision = True
+            self.needs_review = True
 
         return self
